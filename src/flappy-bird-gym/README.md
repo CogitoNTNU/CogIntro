@@ -5,7 +5,22 @@
 install using
 
 ```
-pip install .
+# create virtual environment
+uv venv
+
+# on linux
+source .venv/bin/activate
+
+# on windows
+.venv\Scripts\activate
+
+# install the package in this repository
+uv pip install -e .
+
+# run it
+flappy_bird_gym --mode human
+flappy_bird_gym --mode random
+
 ```
 
 ### Notes
