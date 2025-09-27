@@ -39,6 +39,7 @@ REQUIRED_PACKAGES = [
     "gymnasium",
     "numpy",
     "pygame",
+    "torch",
 ]
 
 # Packages which are only needed for testing code.
