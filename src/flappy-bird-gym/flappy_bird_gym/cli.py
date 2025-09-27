@@ -29,6 +29,7 @@ import time
 import sys
 import os
 
+from agents import BaseAgent
 import flappy_bird_gym
 
 
@@ -77,6 +78,30 @@ def random_agent_env():
             time.sleep(0.5)
             break
 
+def rule_agent_env(agent: BaseAgent):
+    env = agent.env
+    obs, info = env.reset()
+    score = 0
+    while True:
+        env.render()
+
+        # Getting random action:
+        action = agent.select_action(obs)
+
+        # Processing:
+        obs, reward, terminated, truncated, info = env.step(action)
+
+        score += reward
+        print(f"Obs: {obs}\n"
+              f"Action: {action}\n"
+              f"Score: {score}\n")
+
+        time.sleep(1 / 30)
+
+        if terminated or truncated:
+            env.render()
+            time.sleep(0.5)
+            break
 
 
 def main():
