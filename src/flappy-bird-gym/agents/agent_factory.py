@@ -4,7 +4,6 @@ Agent Factory for creating different types of agents
 
 from typing import Dict, Type
 from .base_agent import BaseAgent
-from .dqn_agent import DQNAgent
 
 
 class AgentFactory:
@@ -12,8 +11,7 @@ class AgentFactory:
 
     # Registry of available agents
     _agents: Dict[str, Type[BaseAgent]] = {
-        'dqn': DQNAgent,
-        # Add more agents here as they are implemented
+        # Add agents here as they are implemented
         # 'ppo': PPOAgent,
         # 'rule-based': RuleBasedAgent,
         # 'genetic': GeneticAgent,

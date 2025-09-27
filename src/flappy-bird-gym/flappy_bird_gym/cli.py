@@ -29,20 +29,15 @@ import time
 import sys
 import os
 
-# Add the parent directory to path to import agents
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import flappy_bird_gym
-from agents.agent_factory import AgentFactory
 
 
 def _get_args():
     """ Parses the command line arguments and returns them. """
     parser = argparse.ArgumentParser(description=__doc__)
 
-    # Get available agent modes
-    available_agents = AgentFactory.get_available_agents()
-    all_modes = ["human", "random"] + available_agents
+    # Available modes (only human and random)
+    all_modes = ["human", "random"]
 
     # Argument for the mode of execution:
     parser.add_argument(
@@ -53,11 +48,6 @@ def _get_args():
         help="The execution mode for the game.",
     )
 
-    parser.add_argument(
-        "--model-path",
-        type=str,
-        help="Path to trained model file (for AI agents)",
-    )
 
     return parser.parse_args()
 
@@ -88,55 +78,6 @@ def random_agent_env():
             break
 
 
-def ai_agent_env(agent_type: str, model_path: str = None):
-    """Run an AI agent in the environment."""
-    try:
-        # Create agent
-        agent = AgentFactory.create_agent(agent_type)
-
-        # Load model if provided
-        if model_path:
-            agent.load(model_path)
-            print(f"Loaded model from {model_path}")
-        else:
-            print(f"Running untrained {agent_type} agent (will use random actions initially)")
-
-        # Run agent
-        env = flappy_bird_gym.make("FlappyBird-v0")
-        obs, info = env.reset()
-        score = 0
-        step_count = 0
-
-        while True:
-            env.render()
-
-            # Get action from agent
-            action = agent.select_action(obs)
-
-            # Process step
-            obs, reward, terminated, truncated, info = env.step(action)
-
-            score += reward
-            step_count += 1
-
-            print(f"Step: {step_count}, Obs: {obs}, Action: {action}, Score: {score}")
-
-            time.sleep(1 / 30)  # Control FPS
-
-            if terminated or truncated:
-                env.render()
-                time.sleep(0.5)
-                print(f"Game Over! Final Score: {score}")
-                break
-
-        env.close()
-
-    except ImportError as e:
-        print(f"Failed to import agent dependencies: {e}")
-        print("Make sure PyTorch is installed: pip install torch")
-    except Exception as e:
-        print(f"Error running agent: {e}")
-
 
 def main():
     args = _get_args()
@@ -145,7 +86,5 @@ def main():
         flappy_bird_gym.original_game.main()
     elif args.mode == "random":
         random_agent_env()
-    elif args.mode in AgentFactory.get_available_agents():
-        ai_agent_env(args.mode, args.model_path)
     else:
         print("Invalid mode!")
