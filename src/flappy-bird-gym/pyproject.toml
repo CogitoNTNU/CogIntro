@@ -1,0 +1,15 @@
+[project]
+name = "flappy-bird-gym"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gymnasium",
+    "numpy",
+    "pygame",
+    "torch",
+]
+
+[project.scripts]
+flappy_bird_gym = "flappy_bird_gym.cli:main"
