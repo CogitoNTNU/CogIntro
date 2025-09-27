@@ -1,5 +1,15 @@
 ## Flappy Bird for OpenAI Gym
 
+### Setup
+
+install using
+
+```
+pip install .
+```
+
+### Notes
+
 ![Python versions](https://img.shields.io/pypi/pyversions/flappy-bird-gym)
 [![PyPI](https://img.shields.io/pypi/v/flappy-bird-gym)](https://pypi.org/project/flappy-bird-gym/)
 [![License](https://img.shields.io/github/license/Talendar/flappy-bird-gym)](https://github.com/Talendar/flappy-bird-gym/blob/master/LICENSE)
