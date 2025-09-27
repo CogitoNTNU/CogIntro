@@ -39,6 +39,7 @@ jobs:
 
       - name: Install and sync dependencies
         run: |
+          cd src/flappy-bird-gym
           uv sync --locked --all-extras
 
       - name: Run root tests
