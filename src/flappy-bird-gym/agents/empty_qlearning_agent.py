@@ -18,9 +18,9 @@ class YourQLearningAgent(BaseAgent):
             env_name: str = "FlappyBird-v0",
 
             # TODO: You can play around with these values too :)
-            learning_rate=0.5,  # Decreases with time, this is the starting point
-            discount_factor=0.99,  # The article said 1
-            exploration_prob=0.5,  # How often will the agent do a random move?
+            learning_rate=0.2,  # How much the table changes after every action
+            discount_factor=1,  # The importance of future reward
+            exploration_prob=0.2,  # How often the agent does a random move
             epochs=1000  # How many times we play the game during training
         ):
 
@@ -71,7 +71,7 @@ class YourQLearningAgent(BaseAgent):
             # TODO: Update learning rate and exploration rate, if you want :)
                 # Here you can try different strategies!
                 # For example you can start with learning rate = max(0.05, learing rate * 0.999)
-                # And exploration = max(0.005, exploration * 0.995)
+                # And exploration = max(0.005, exploration * 0.999)
                 # Or just nothing
                 # You decide :)
 
