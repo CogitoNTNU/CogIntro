@@ -29,7 +29,11 @@ import time
 import sys
 import os
 
-from agents import BaseAgent
+# Add the parent directory to Python path to find agents module
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from agents.base_agent import BaseAgent
+from agents.empty_qlearning_agent import YourQLearningAgent
 import flappy_bird_gym
 
 
@@ -77,6 +81,35 @@ def random_agent_env():
             env.render()
             time.sleep(0.5)
             break
+
+def qlearning_agent_env(agent: YourQLearningAgent):
+    
+    agent.train(agent.epochs)
+    
+    env = agent.env
+    obs, info = env.reset()
+    score = 0
+    while True:
+        env.render()
+
+        # Getting random action:
+        action = agent.select_action(obs)
+
+        # Processing:
+        obs, reward, terminated, truncated, info = env.step(action)
+
+        score += reward
+        print(f"Obs: {obs}\n"
+              f"Action: {action}\n"
+              f"Score: {score}\n")
+
+        time.sleep(1 / 30)
+
+        if terminated or truncated:
+            env.render()
+            time.sleep(0.5)
+            break
+
 
 def rule_agent_env(agent: BaseAgent):
     env = agent.env
