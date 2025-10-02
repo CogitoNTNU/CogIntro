@@ -3,14 +3,14 @@ Rule based Agent class for Flappy Bird environment
 """
 
 import numpy as np
-from abc import ABC, abstractmethod
-from typing import Union, Optional, Dict, Any
+from typing import Dict, Any
 from agents.base_agent import BaseAgent
 import flappy_bird_gym
 
 
 class RuleAgent(BaseAgent):
     """Abstract base class for all Flappy Bird agents."""
+
     def __init__(self, env_name: str = "FlappyBird-v0"):
         """
         Initialize the base agent.
@@ -32,7 +32,7 @@ class RuleAgent(BaseAgent):
         Returns:
             Action to take (0: do nothing, 1: flap)
         """
-        return 1 if observation[1]+0.04 < 0 else 0
+        return 1 if observation[1] + 0.04 < 0 else 0
 
     def train(self, episodes: int = 1000) -> Dict[str, Any]:
         """

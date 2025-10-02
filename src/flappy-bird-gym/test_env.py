@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-import time
 import flappy_bird_gym
+
 
 def test_simple_env():
     """Test the simple numerical environment."""
@@ -17,7 +17,9 @@ def test_simple_env():
     for i in range(10):
         action = env.action_space.sample()  # Random action
         obs, reward, terminated, truncated, info = env.step(action)
-        print(f"Step {i+1}: action={action}, obs={obs}, reward={reward}, terminated={terminated}")
+        print(
+            f"Step {i + 1}: action={action}, obs={obs}, reward={reward}, terminated={terminated}"
+        )
 
         if terminated or truncated:
             print("Episode ended, resetting...")
@@ -26,6 +28,7 @@ def test_simple_env():
 
     env.close()
     print("Simple environment test completed!\n")
+
 
 def test_rgb_env():
     """Test the RGB image environment."""
@@ -41,7 +44,9 @@ def test_rgb_env():
     for i in range(5):
         action = env.action_space.sample()  # Random action
         obs, reward, terminated, truncated, info = env.step(action)
-        print(f"Step {i+1}: action={action}, obs_shape={obs.shape}, reward={reward}, terminated={terminated}")
+        print(
+            f"Step {i + 1}: action={action}, obs_shape={obs.shape}, reward={reward}, terminated={terminated}"
+        )
 
         if terminated or truncated:
             print("Episode ended, resetting...")
@@ -50,6 +55,7 @@ def test_rgb_env():
 
     env.close()
     print("RGB environment test completed!")
+
 
 if __name__ == "__main__":
     test_simple_env()

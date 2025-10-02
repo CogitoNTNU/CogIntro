@@ -21,10 +21,8 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Setup of the flappy-bird-gym package.
-"""
+"""Setup of the flappy-bird-gym package."""
 
-from typing import List
 import setuptools
 
 _VERSION = "0.3.0"
@@ -42,9 +40,7 @@ REQUIRED_PACKAGES = [
 ]
 
 # Packages which are only needed for testing code.
-TEST_PACKAGES = [
-
-]  # type: List[str]
+TEST_PACKAGES = []  # type: List[str]
 
 # Loading the "long description" from the projects README file.
 with open("README.md", "r", encoding="utf-8") as fh:
@@ -62,8 +58,7 @@ setuptools.setup(
     download_url="https://github.com/Talendar/flappy-bird-gym/releases",
     # Contained modules and scripts:
     packages=setuptools.find_packages(),
-    package_data={"flappy_bird_gym": ["assets/sprites/*",
-                                      "assets/audio/*"]},
+    package_data={"flappy_bird_gym": ["assets/sprites/*", "assets/audio/*"]},
     install_requires=REQUIRED_PACKAGES,
     tests_require=REQUIRED_PACKAGES + TEST_PACKAGES,
     # PyPI package information:
@@ -88,17 +83,18 @@ setuptools.setup(
     ],
     license="MIT License",
     python_requires=">=3.6",
-    keywords=' '.join([
-        "Flappy-Bird"
-        "Game",
-        "Gym",
-        "OpenAI-Gym",
-        "Reinforcement-Learning",
-        "Reinforcement-Learning-Environment",
-    ]),
+    keywords=" ".join(
+        [
+            "Flappy-BirdGame",
+            "Gym",
+            "OpenAI-Gym",
+            "Reinforcement-Learning",
+            "Reinforcement-Learning-Environment",
+        ]
+    ),
     entry_points={
-        'console_scripts': [
-            'flappy_bird_gym = flappy_bird_gym.cli:main',
+        "console_scripts": [
+            "flappy_bird_gym = flappy_bird_gym.cli:main",
         ],
     },
 )

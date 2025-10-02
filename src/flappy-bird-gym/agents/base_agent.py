@@ -4,7 +4,7 @@ Base Agent class for Flappy Bird environment
 
 import numpy as np
 from abc import ABC, abstractmethod
-from typing import Union, Optional, Dict, Any
+from typing import Dict, Any
 
 
 class BaseAgent(ABC):
@@ -89,12 +89,12 @@ class BaseAgent(ABC):
         self.env.close()
 
         return {
-            'mean_score': np.mean(scores),
-            'std_score': np.std(scores),
-            'max_score': np.max(scores),
-            'min_score': np.min(scores),
-            'mean_episode_length': np.mean(episode_lengths),
-            'episodes_evaluated': episodes
+            "mean_score": np.mean(scores),
+            "std_score": np.std(scores),
+            "max_score": np.max(scores),
+            "min_score": np.min(scores),
+            "mean_episode_length": np.mean(episode_lengths),
+            "episodes_evaluated": episodes,
         }
 
     def save(self, filepath: str) -> None:

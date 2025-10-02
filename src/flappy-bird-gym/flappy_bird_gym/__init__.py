@@ -21,19 +21,19 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Registers the gym environments and exports the `gym.make` function.
-"""
+"""Registers the gym environments and exports the `gym.make` function."""
 
 # Silencing pygame:
 import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
+
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
 
 # Exporting envs:
 from flappy_bird_gym.envs.flappy_bird_env_rgb import FlappyBirdEnvRGB
 from flappy_bird_gym.envs.flappy_bird_env_simple import FlappyBirdEnvSimple
 
 # Exporting original game:
-from flappy_bird_gym import original_game
+# from flappy_bird_gym import original_game
 
 # Exporting gym.make:
 from gymnasium import make
