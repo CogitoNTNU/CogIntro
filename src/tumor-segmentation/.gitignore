@@ -192,3 +192,11 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Weights & Biases
+wandb
+
+# Project
+data/psma-fdg-pet-ct-lesions.zip
+data/psma-fdg-pet-ct-lesions/
+slurm_outputs/
