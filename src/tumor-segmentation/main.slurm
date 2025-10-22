@@ -19,7 +19,7 @@ echo "Name of job: $SLURM_JOB_NAME"
 echo "ID of job: $SLURM_JOB_ID"
 echo "The job was run on these nodes: $SLURM_JOB_NODELIST"
 
-ENV_PATH="/cluster/work/$(whoami)/course-on-hpc-slurm/cv-env/"
+ENV_PATH="/cluster/work/$(whoami)/tumor-segmentation/cv-env/"
 
 module purge
 module load Anaconda3/2024.02-1
@@ -29,7 +29,7 @@ conda create -y --prefix ${ENV_PATH} python=3.11
 
 # Activate the environment
 conda activate ${ENV_PATH}
-pip install -r pytorch_requirements.txt
+pip install -r main_requirements.txt
 
 echo "Downloaded dependencies:"
 pip freeze

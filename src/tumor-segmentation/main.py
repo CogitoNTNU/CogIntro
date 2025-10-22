@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import wandb
+import nibabel as nib
 
 # Loads the variables from the .env file into the runtime environment
 from dotenv import load_dotenv
@@ -35,6 +36,25 @@ def main():
             "num_labels": len(dataset_info["labels"]),
         }
     )
+
+    # Load and display one of the images in the W&B dashboard
+    image_path = Path(
+        "data/psma-fdg-pet-ct-lesions/imagesTr/psma_ffcaa75377465b37_2018-03-04_0001.nii.gz"
+    )
+    nifti_image = nib.load(image_path)
+    image_data = nifti_image.get_fdata()
+
+    print(f"Loaded image: {image_path.name}, shape: {image_data.shape}")
+
+    # Log a few slices
+    middle_slice = image_data[:, :, image_data.shape[2] // 2 + 40]
+    wandb.log({"sample_image1": wandb.Image(middle_slice, caption=image_path.name)})
+
+    middle_slice = image_data[:, :, image_data.shape[2] // 2 + 50]
+    wandb.log({"sample_image2": wandb.Image(middle_slice, caption=image_path.name)})
+
+    middle_slice = image_data[:, :, image_data.shape[2] // 2 + 60]
+    wandb.log({"sample_image3": wandb.Image(middle_slice, caption=image_path.name)})
 
     wandb.finish()
 
