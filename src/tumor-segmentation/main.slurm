@@ -3,7 +3,8 @@
 #SBATCH --job-name="tumor-segmentation"
 #SBATCH --time=03:00:00
 #SBATCH --partition=GPUQ
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:a100:1
+#SBATCH --constraint=gpu80g
 #SBATCH --mem=32GB
 #SBATCH --nodes=1
 #SBATCH --output=slurm_outputs/output_tumor_seg.txt
