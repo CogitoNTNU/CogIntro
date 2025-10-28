@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import wandb
+import logging
 
 import numpy as np
 import pandas as pd
@@ -54,15 +55,35 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('tumor_segmentation.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 
 def main():
-    print("Script started")
+    logger.info("="*50)
+    logger.info("Starting tumor segmentation training script")
+    logger.info("="*50)
 
     # Load environment variables (from the .env file)
+    logger.info("Loading environment variables...")
     WANDB_API_KEY = os.getenv("WANDB_API_KEY")
     #WANDB_ENTITY = os.getenv("WANDB_ENTITY")
+    
+    if not WANDB_API_KEY:
+        logger.warning("WANDB_API_KEY not found in environment variables")
+    else:
+        logger.info("WANDB_API_KEY loaded successfully")
 
     # Initialize W&B run
+    logger.info("Initializing Weights & Biases...")
     wandb.login(key=WANDB_API_KEY)
     run = wandb.init(
         project="tumor-segmentation",
@@ -96,17 +117,23 @@ def main():
         tags=["segmentation", "efficientnet"],
         save_code=True,
     )
+    logger.info(f"W&B run initialized: {run.name}")
 
     # Log patient image and segmentation
+    logger.info("Logging sample patient image and segmentation to W&B...")
     patient_image_path = Path("data/autopet/patients/imgs/patient_000.png")
     segmentation_path = Path("data/autopet/patients/labels/segmentation_000.png")
 
-    wandb.log(
-        {
-            "patient_image": wandb.Image(str(patient_image_path)),
-            "segmentation": wandb.Image(str(segmentation_path)),
-        }
-    )
+    if patient_image_path.exists() and segmentation_path.exists():
+        wandb.log(
+            {
+                "patient_image": wandb.Image(str(patient_image_path)),
+                "segmentation": wandb.Image(str(segmentation_path)),
+            }
+        )
+        logger.info("Sample images logged to W&B successfully")
+    else:
+        logger.warning(f"Sample images not found: {patient_image_path} or {segmentation_path}")
 
 
 
@@ -140,12 +167,13 @@ def main():
         thresh        = [0.3, 0.4, 0.5, 0.6, 0.7]
 
 
-    print(WANDB_API_KEY)
+    logger.info(f"WANDB_API_KEY: {'*' * 10 if WANDB_API_KEY else 'Not set'}")
 
 
     def set_seed(seed = 42):
         '''Sets the seed of the entire notebook so results are the same every time we run.
         This is for REPRODUCIBILITY.'''
+        logger.info(f"Setting random seed to {seed} for reproducibility...")
         np.random.seed(seed)
         random.seed(seed)
         torch.manual_seed(seed)
@@ -155,27 +183,33 @@ def main():
         torch.backends.cudnn.benchmark = False
         # Set a fixed value for the hash seed
         os.environ['PYTHONHASHSEED'] = str(seed)
-        print('-> SEEDING DONE')
+        logger.info('Random seed set successfully')
 
     set_seed(CFG.seed)
 
 
 
+    logger.info("Starting data loading and preprocessing...")
     CONTROLS_DIR = "data/nmai/controls"
     PATIENTS_DIR = "data/nmai/patients"
 
+    logger.info(f"Loading data from directories: {CONTROLS_DIR} and {PATIENTS_DIR}")
     rows = []
     data_df = pd.DataFrame(columns=['image_id', 'image_path', 'label_path', 'label'])
 
     # Load the control images
+    logger.info("Loading control images...")
     control_images = glob(os.path.join(CONTROLS_DIR, "imgs", "*.png"))
+    logger.info(f"Found {len(control_images)} control images")
     for img_path in control_images:
         image_id = os.path.basename(img_path).split('/')[-1]
         rows.append({'image_id': image_id, 'image_path': f'{CONTROLS_DIR}/imgs/{image_id}', 'label_path': '', 'label': 0})
 
     # Load the patient images
+    logger.info("Loading patient images and segmentation labels...")
     patient_images = glob(os.path.join(PATIENTS_DIR, "imgs", "*.png"))
     segmentation_labels = glob(os.path.join(PATIENTS_DIR, "labels", "*.png"))
+    logger.info(f"Found {len(patient_images)} patient images and {len(segmentation_labels)} segmentation labels")
     for img_path, _ in zip(patient_images, segmentation_labels):
         image_id = os.path.basename(img_path).split('/')[-1]
         label_id = image_id.replace('patient', 'segmentation')
@@ -183,11 +217,13 @@ def main():
 
     data_df = pd.DataFrame(rows)
     data_df = data_df.reset_index(drop=True)
+    logger.info(f"Total dataset size: {len(data_df)} samples")
     
 
 
     df = data_df.copy()
-    df['label'].value_counts()
+    label_counts = df['label'].value_counts()
+    logger.info(f"Dataset label distribution:\n{label_counts}")
 
 
 
@@ -233,10 +269,13 @@ def main():
 
 
 
+    logger.info("Setting up cross-validation folds...")
     skf = StratifiedGroupKFold(n_splits=CFG.n_fold, shuffle=True, random_state=CFG.seed)
     for fold,(train_idx, val_idx) in enumerate(skf.split(df, df['label'], df['image_id'])):
         df.loc[val_idx, 'fold'] = fold
-    display(df.groupby(['fold','label'])['image_id'].count())
+    fold_distribution = df.groupby(['fold','label'])['image_id'].count()
+    logger.info(f"Cross-validation fold distribution:\n{fold_distribution}")
+    print(f"Cross-validation fold distribution:\n{fold_distribution}")
 
 
 
@@ -350,8 +389,12 @@ def main():
         return train_loader, valid_loader, oof_loader, len(train_df) // CFG.train_bs, valid_df
 
 
+    logger.info("Testing data loaders and visualizing sample data...")
     train_loader, valid_loader, oof_loader, _, valid_df = prepare_loaders(fold=0)
+    logger.info(f"Data loaders prepared - Train: {len(train_loader)} batches, Valid: {len(valid_loader)} batches")
+    
     imgs, masks, _ = next(iter(train_loader))
+    logger.info(f"Sample batch shape - Images: {imgs.shape}, Masks: {masks.shape}")
 
     for i in range(imgs.shape[0]):
         #make the image and mask two suplots horizontally with third image overlaying them together
@@ -368,10 +411,13 @@ def main():
         plt.show()
 
     imgs, msks, paths_ = next(iter(valid_loader))
+    logger.info(f"Validation batch shape - Images: {imgs.shape}, Masks: {msks.shape}")
 
     for i in range(imgs.shape[0]):
         _img = np.transpose(imgs[i].cpu().numpy(), (1, 2, 0))
         _mask = np.transpose(msks[i].cpu().numpy(), (1, 2, 0))
+        logger.info(f"Image {i} - Min: {_img.min():.4f}, Max: {_img.max():.4f}")
+        logger.info(f"Mask {i} - Unique values: {np.unique(_mask)}")
         print(_img.max(), _img.min())
         print(np.unique(_mask))
         plt.imshow(_img)
@@ -380,11 +426,13 @@ def main():
 
     import gc
     gc.collect()
+    logger.info("Memory cleanup completed")
 
 
 
 
     def build_model():
+        logger.info(f"Building U-Net model with backbone: {CFG.backbone}")
         model = smp.Unet(encoder_name=CFG.backbone,      # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
                         encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
                         in_channels=1,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
@@ -394,13 +442,17 @@ def main():
                         aux_params = None if not CFG.aux_head else {"classes": 1,
                                                                     "activation": None})
         model.to(CFG.device)
+        logger.info(f"Model built and moved to device: {CFG.device}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         return model
 
 
     def load_model(path):
+        logger.info(f"Loading model from: {path}")
         model = build_model()
         model.load_state_dict(torch.load(path))
         model.eval()
+        logger.info("Model loaded and set to evaluation mode")
         return model
 
 
@@ -443,6 +495,7 @@ def main():
 
 
     def train_one_epoch(model, optimizer, scheduler, dataloader, device, epoch:int):
+        logger.info(f"Starting training epoch {epoch}")
         model.train()
 
         dataset_size = 0
@@ -496,12 +549,17 @@ def main():
 
         torch.cuda.empty_cache()
         gc.collect()
+        
+        epoch_dice = np.mean(train_dices)
+        epoch_jaccard = np.mean(train_jaccards)
+        logger.info(f"Epoch {epoch} training completed - Loss: {epoch_loss:.4f}, Dice: {epoch_dice:.4f}, Jaccard: {epoch_jaccard:.4f}")
 
-        return epoch_loss, np.mean(train_dices), np.mean(train_jaccards)
+        return epoch_loss, epoch_dice, epoch_jaccard
 
 
     @torch.no_grad()
     def valid_one_epoch(model, dataloader, device, optimizer, epoch:int):
+        logger.info(f"Starting validation epoch {epoch}")
         model.eval()
 
         dataset_size = 0
@@ -555,6 +613,8 @@ def main():
 
         torch.cuda.empty_cache()
         gc.collect()
+        
+        logger.info(f"Epoch {epoch} validation completed - Loss: {epoch_loss:.4f}, Dice: {global_dice:.4f}")
 
         return epoch_loss, global_dice
 
@@ -572,6 +632,7 @@ def main():
 
     @torch.no_grad()
     def oof_one_epoch(model, dataloader, device, valid_df, fold, tta_transform_names):
+        logger.info(f"Starting out-of-fold evaluation for fold {fold}")
         model.eval()
 
         oof_scores = []
@@ -613,15 +674,18 @@ def main():
             pbar.set_postfix(base_dice=f'{base_dice:.4f}', tta_dice=f'{tta_dice:.4f}')
 
         df_scores = pd.DataFrame(oof_scores)
+        logger.info(f"OOF evaluation completed for {len(df_scores)} samples")
 
         # Merge on image_path instead of index
         valid_df = valid_df.copy()
         valid_df = valid_df.merge(df_scores, on='image_path', how='left')
         valid_df.to_csv(f'tta_results_fold_{fold}.csv', index=False)
+        logger.info(f"TTA results saved to tta_results_fold_{fold}.csv")
 
         global_preds = np.concatenate(global_preds, axis=0)
         global_masks = np.concatenate(global_masks, axis=0)
         global_dice = get_dice(global_preds, global_masks)
+        logger.info(f"Global OOF Dice score: {global_dice:.4f}")
 
         torch.cuda.empty_cache()
         gc.collect()
@@ -640,22 +704,28 @@ def main():
     import os
 
     def run_training(model, optimizer, scheduler, num_epochs, train_loader, valid_loader, fold=0):
+        logger.info(f"Starting training for fold {fold}")
         if torch.cuda.is_available():
+            logger.info(f"CUDA device: {torch.cuda.get_device_name()}")
             print(f"CUDA: {torch.cuda.get_device_name()}\n")
 
         # Create the 'models' directory if it doesn't exist
         os.makedirs('models', exist_ok=True)
+        logger.info("Models directory created/verified")
 
         wandb.watch(model, log='all', log_freq=10)
+        logger.info("W&B model watching enabled")
 
         start_time = time.time()
         best_model_wts = copy.deepcopy(model.state_dict())
         best_dice = -np.inf
         best_epoch = -1
         history = defaultdict(list)
+        logger.info(f"Training configuration - Epochs: {num_epochs}, Train batches: {len(train_loader)}, Valid batches: {len(valid_loader)}")
 
         for epoch in range(1, num_epochs + 1):
             gc.collect()
+            logger.info(f"Starting epoch {epoch}/{num_epochs}")
             print(f"{'='*30}\nEpoch {epoch}/{num_epochs}")
 
             train_loss, train_dice, train_jaccard = train_one_epoch(
@@ -679,10 +749,12 @@ def main():
             history['Valid Loss'].append(val_loss)
             history['Valid Dice'].append(val_dice)
 
+            logger.info(f"Epoch {epoch} results - Train Loss: {train_loss:.4f}, Train Dice: {train_dice:.4f}, Train Jaccard: {train_jaccard:.4f}, Valid Loss: {val_loss:.4f}, Valid Dice: {val_dice:.4f}")
             print(f"Train Loss: {train_loss:.4f} - Train Dice: {train_dice:.4f} - Train Jaccard: {train_jaccard:.4f} | Valid Loss: {val_loss:.4f} | Valid Dice: {val_dice:.4f}")
 
             # Save best model
             if val_dice > best_dice:
+                logger.info(f"New best model found! Dice improved from {best_dice:.4f} to {val_dice:.4f}")
                 print(f"✓ Dice Improved: {best_dice:.4f} → {val_dice:.4f}")
                 best_dice = val_dice
                 best_epoch = epoch
@@ -690,11 +762,13 @@ def main():
 
                 best_path = f'models/best_fold{fold}_dice{best_dice:.4f}.pth'
                 torch.save(model.state_dict(), best_path)
+                logger.info(f"Best model saved to {best_path}")
                 print(f"✔ Model saved to {best_path}")
                 # W&B artifact
                 artifact = wandb.Artifact(f'best_model_fold{fold}', type='model')
                 artifact.add_file(best_path)
                 run.log_artifact(artifact)
+                logger.info("Model artifact logged to W&B")
 
             # Always save last epoch
             last_path = f"last_epoch-S1-{fold:02d}.bin"
@@ -711,10 +785,13 @@ def main():
 
         elapsed = time.time() - start_time
         h, m, s = int(elapsed // 3600), int((elapsed % 3600) // 60), int(elapsed % 60)
+        logger.info(f"Training completed in {h}h {m}m {s}s")
+        logger.info(f"Best Dice score: {best_dice:.4f} achieved at epoch {best_epoch}")
         print(f"🏁 Training complete in {h}h {m}m {s}s")
         print(f"🏆 Best Dice: {best_dice:.4f} (Epoch {best_epoch})")
 
         model.load_state_dict(best_model_wts)
+        logger.info("Best model weights loaded for inference")
         return model, history
 
 
@@ -759,27 +836,35 @@ def main():
         return scheduler
 
 
+    logger.info("Starting k-fold cross-validation training...")
     oof_dice_scores = []
     all_oof_dfs = []
     tta_transform_names = ["identity", "hflip", "vflip"]
 
     for fold in CFG.folds:
+        logger.info(f"Starting fold {fold} training")
         print(f'\n{"#"*30}\n##### Fold {fold}\n{"#"*30}\n')
         run.name = f"fold{fold}_{datetime.now():%Y%m%d_%H%M%S}"
+        logger.info(f"W&B run name updated to: {run.name}")
+        
         model = build_model()
 
         optimizer = optim.AdamW(model.parameters(), lr=CFG.lr, weight_decay=0.05)
         CFG.scheduler = "CosineAnnealingLR"
+        logger.info(f"Optimizer initialized with lr={CFG.lr}, weight_decay=0.05")
 
         # Loaders for this fold (train + valid + TTA OOF)
+        logger.info(f"Preparing data loaders for fold {fold}...")
         train_loader, valid_loader, oof_loader, train_steps, valid_df = prepare_loaders(
             fold=fold,
             non_empty=False,
         )
 
         scheduler = fetch_scheduler(optimizer, train_steps)
+        logger.info(f"Scheduler initialized: {CFG.scheduler}")
 
         # Train model
+        logger.info(f"Starting training for fold {fold}...")
         model, _ = run_training(
             model=model,
             optimizer=optimizer,
@@ -791,6 +876,7 @@ def main():
         )
 
         # TTA-based OOF prediction
+        logger.info(f"Starting TTA-based out-of-fold evaluation for fold {fold}...")
         oof_dice, valid_df_with_scores = oof_one_epoch(
             model=model,
             dataloader=oof_loader,
@@ -800,6 +886,7 @@ def main():
             tta_transform_names=tta_transform_names
         )
 
+        logger.info(f"Fold {fold} completed - OOF Dice: {oof_dice:.4f}")
         print(f"✅ Fold {fold} OOF Dice: {oof_dice:.4f}")
 
         oof_dice_scores.append(oof_dice)
@@ -807,17 +894,25 @@ def main():
 
     # Final average OOF Dice
     mean_oof_dice = np.mean(oof_dice_scores)
+    std_oof_dice = np.std(oof_dice_scores)
+    logger.info(f"Cross-validation completed - Mean OOF Dice: {mean_oof_dice:.4f} ± {std_oof_dice:.4f}")
+    logger.info(f"Individual fold scores: {[f'{score:.4f}' for score in oof_dice_scores]}")
     print(f"\n{'='*40}\n🏁 Final OOF Dice across all folds: {mean_oof_dice:.4f}")
 
     # Save full OOF dataframe
+    logger.info("Saving out-of-fold results...")
     final_oof_df = pd.concat(all_oof_dfs, ignore_index=True)
     final_oof_df.to_csv("oof_scores_all_folds.csv", index=False)
+    logger.info(f"OOF results saved to oof_scores_all_folds.csv ({len(final_oof_df)} samples)")
 
     # Finish W&B
+    logger.info("Finalizing W&B run...")
     run.finish()
+    logger.info("W&B run finished successfully")
 
-
-    #wandb.finish()
+    logger.info("="*50)
+    logger.info("Tumor segmentation training script completed successfully")
+    logger.info("="*50)
     print("Script ended successfully")
 
 
