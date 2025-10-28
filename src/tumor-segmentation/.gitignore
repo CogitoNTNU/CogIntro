@@ -200,4 +200,6 @@ wandb
 data/psma-fdg-pet-ct-lesions.zip
 data/psma-fdg-pet-ct-lesions/
 data/autopet/
+data/nmai/
+
 slurm_outputs/
