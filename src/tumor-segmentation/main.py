@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 import os
+import time
+import gc
+import copy
 from pathlib import Path
 import wandb
 import logging
@@ -14,6 +17,7 @@ from tqdm import tqdm
 tqdm.pandas()
 
 from dataclasses import dataclass
+from collections import defaultdict
 
 
 # visualization
@@ -95,12 +99,499 @@ class CFG:
     thresh        = [0.3, 0.4, 0.5, 0.6, 0.7]
 
 
+def set_seed(seed = 42):
+    '''Sets the seed of the entire notebook so results are the same every time we run.
+    This is for REPRODUCIBILITY.'''
+    logger.info(f"Setting random seed to {seed} for reproducibility...")
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    # When running on the CuDNN backend, two further options must be set
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # Set a fixed value for the hash seed
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    logger.info('Random seed set successfully')
+
+
+# Data transforms configuration
+data_transforms = {"train": A.Compose([A.HorizontalFlip(p=0.5),
+                                   A.VerticalFlip(p=0.5),
+                                #    A.ShiftScaleRotate(rotate_limit=25, scale_limit=0.15, shift_limit=0, p=0.25),
+#                                        A.CoarseDropout(max_holes=16, max_height=64 ,max_width=64 ,p=0.5),
+#                                        A.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.25, p=0.75),
+#                                        A.GridDistortion(num_steps=5, distort_limit=0.3, interpolation=1, p=0.5),
+                                   A.RandomCrop(height=CFG.img_size[0], width=CFG.img_size[1], always_apply=True, p=1)
+                                    ]),
+
+                "valid": A.Compose([]),#PadToDivisible(divisible=32, always_apply=True, p=1.0),
+
+                "tta": [
+                    A.Compose([]),  # identity
+                    A.HorizontalFlip(p=1.0),
+                    A.VerticalFlip(p=1.0)
+                 ]
+                }
+
+
+# Loss functions
+#JaccardLoss    = smp.losses.JaccardLoss(mode='binary')
+DiceLoss       = smp.losses.DiceLoss(mode='binary')
+#BCELoss        = smp.losses.SoftBCEWithLogitsLoss()
+#LovaszLoss     = smp.losses.LovaszLoss(mode='binary', per_image=False)
+#TverskyLoss    = smp.losses.TverskyLoss(mode='binary', log_loss=False, smooth=0.1)
+#SegFocalLoss   = smp.losses.FocalLoss(mode = 'binary')
+#BCE = torch.nn.BCEWithLogitsLoss()
+
+
+def dice_coef(y_true, y_pred, thr=0.5, dim=(2, 3), epsilon=1e-6):
+    y_true = y_true.float()
+    y_pred = (y_pred > thr).float()
+    inter = (y_true * y_pred).sum(dim=dim)
+    den = y_true.sum(dim=dim) + y_pred.sum(dim=dim)
+    dice = (2 * inter + epsilon) / (den + epsilon)
+    return dice.mean()  # mean over batch (and channel if present)
+
+
+def iou_coef(y_true, y_pred, thr=0.5, dim=(2, 3), epsilon=1e-6):
+    y_true = y_true.float()
+    y_pred = (y_pred > thr).float()
+    inter = (y_true * y_pred).sum(dim=dim)
+    union = y_true.sum(dim=dim) + y_pred.sum(dim=dim) - inter
+    iou = (inter + epsilon) / (union + epsilon)
+    return iou.mean()  # mean over batch
+
+
+def criterion(y_pred, y_true):
+    return DiceLoss(y_pred, y_true)
+
+
+def build_model():
+    logger.info(f"Building U-Net model with backbone: {CFG.backbone}")
+    model = smp.Unet(encoder_name=CFG.backbone,      # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
+                    encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
+                    in_channels=1,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
+                    classes=1,                      # model output channels (number of classes in your dataset)
+                    activation=None,
+                    decoder_attention_type = CFG.decoder_attention_type, #"scse",
+                    aux_params = None if not CFG.aux_head else {"classes": 1,
+                                                                "activation": None})
+    model.to(CFG.device)
+    logger.info(f"Model built and moved to device: {CFG.device}")
+    logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    return model
+
+
+def load_model(path):
+    logger.info(f"Loading model from: {path}")
+    model = build_model()
+    model.load_state_dict(torch.load(path))
+    model.eval()
+    logger.info("Model loaded and set to evaluation mode")
+    return model
+
+
+def train_one_epoch(model, optimizer, scheduler, dataloader, device, epoch:int):
+    logger.info(f"Starting training epoch {epoch}")
+    model.train()
+
+    dataset_size = 0
+    running_loss = 0.0
+    train_jaccards = []
+    train_dices = []
+
+    sigmoid = torch.sigmoid  # Faster than instantiating nn.Sigmoid()
+
+    pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Train ')
+
+    optimizer.zero_grad()
+
+    for step, (images, masks, paths) in pbar:
+        images = images.to(device, dtype=torch.float)
+        masks  = masks.to(device, dtype=torch.float)
+        batch_size = images.size(0)
+
+        y_pred = model(images)
+        loss = criterion(y_pred, masks)
+        loss.backward()
+
+        y_pred = sigmoid(y_pred)
+
+        train_dice = dice_coef(masks, y_pred).cpu().item()
+        train_jaccard = iou_coef(masks, y_pred).cpu().item()
+        train_dices.append(train_dice)
+        train_jaccards.append(train_jaccard)
+
+        if (step + 1) % CFG.n_accumulate == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+
+            if scheduler and CFG.scheduler not in ["ReduceLROnPlateau", "ExponentialLR"]:
+                scheduler.step()
+
+        running_loss += loss.item() * batch_size
+        dataset_size += batch_size
+
+        epoch_loss = running_loss / dataset_size
+        wandb.log({'train_loss': running_loss, 'epoch': epoch})
+        # W&B per-epoch training metrics
+        current_lr = optimizer.param_groups[0]['lr']
+        mem = torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0
+
+        pbar.set_postfix(loss=f'{epoch_loss:0.4f}',
+                        lr=f'{current_lr:0.5f}',
+                        jac=np.mean(train_jaccards),
+                        dice=np.mean(train_dices),
+                        gpu_mem=f'{mem:0.2f} GB')
+
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    epoch_dice = np.mean(train_dices)
+    epoch_jaccard = np.mean(train_jaccards)
+    logger.info(f"Epoch {epoch} training completed - Loss: {epoch_loss:.4f}, Dice: {epoch_dice:.4f}, Jaccard: {epoch_jaccard:.4f}")
+
+    return epoch_loss, epoch_dice, epoch_jaccard
+
+
+@torch.no_grad()
+def valid_one_epoch(model, dataloader, device, optimizer, epoch:int):
+    logger.info(f"Starting validation epoch {epoch}")
+    model.eval()
+
+    dataset_size = 0
+    running_loss = 0.0
+    global_masks = []
+    global_preds = []
+
+    pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Valid ')
+
+    for step, (images, masks, paths) in pbar:
+        images = images.float().to(device)
+        masks = masks.float().to(device)
+        batch_size = images.size(0)
+
+        y_pred = model(images)
+        loss = criterion(y_pred, masks)
+        running_loss += loss.item() * batch_size
+        dataset_size += batch_size
+
+        epoch_loss = running_loss / dataset_size
+
+        y_pred = torch.sigmoid(y_pred)
+        global_masks.append(masks.cpu().numpy())
+        global_preds.append(y_pred.detach().cpu().numpy())
+
+        current_lr = optimizer.param_groups[0]['lr']
+        mem = torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0
+        pbar.set_postfix(valid_loss=f'{epoch_loss:0.4f}',
+                        lr=f'{current_lr:0.5f}',
+                        gpu_mem=f'{mem:0.2f} GB')
+
+    # For sample images, take first example of last batch
+    # Concatenate all batches
+    global_masks = np.concatenate(global_masks, axis=0)
+    global_preds = np.concatenate(global_preds, axis=0)
+    global_dice = get_dice(global_preds, global_masks)
+
+    # Log overall validation metrics
+    wandb.log({'val_loss': epoch_loss, 'val_dice': global_dice, 'epoch': epoch})
+
+    # For sample images, take first example of last batch
+    img_np = images[0].cpu().permute(1,2,0).numpy()
+    mask_np = masks[0].cpu().permute(1,2,0).numpy()
+    pred_np = global_preds[-1][0].astype('float32') # Remove transpose as it's a single channel
+    wandb.log({
+        'input': wandb.Image(img_np, caption='input'),
+        'mask': wandb.Image(mask_np, caption='mask'),
+        'pred': wandb.Image(pred_np, caption='pred'),
+        'epoch': epoch
+    })
+
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    logger.info(f"Epoch {epoch} validation completed - Loss: {epoch_loss:.4f}, Dice: {global_dice:.4f}")
+
+    return epoch_loss, global_dice
+
+
+def reverse_transform(pred, transform_type):
+    if transform_type == "hflip":
+        return np.fliplr(pred)
+    elif transform_type == "vflip":
+        return np.flipud(pred)
+    elif transform_type == "identity":
+        return pred
+    else:
+        raise ValueError(f"Unknown TTA transform: {transform_type}")
+
+
+@torch.no_grad()
+def oof_one_epoch(model, dataloader, device, valid_df, fold, tta_transform_names):
+    logger.info(f"Starting out-of-fold evaluation for fold {fold}")
+    model.eval()
+
+    oof_scores = []
+    global_preds = []
+    global_masks = []
+
+    pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='OOF Eval')
+
+    for step, (tta_images, masks, img_path) in pbar:
+        tta_images = tta_images.squeeze(0).to(device).float()
+        masks = masks.squeeze(0).to(device).float()
+        img_path = img_path[0] if isinstance(img_path, list) else img_path
+        img_path = str(img_path)  # ensure string for merging
+
+        preds = model(tta_images)
+        preds = torch.sigmoid(preds).squeeze(1).cpu().numpy()
+        masks_np = masks.squeeze().cpu().numpy()
+
+        aligned_preds = []
+        for pred, tname in zip(preds, tta_transform_names):
+            aligned_preds.append(reverse_transform(pred, tname))
+
+        aligned_preds = np.stack(aligned_preds, axis=0)
+        tta_avg_pred = aligned_preds.mean(axis=0)
+        base_pred = aligned_preds[0]
+
+        base_dice = get_dice(base_pred[None], masks_np[None])
+        tta_dice = get_dice(tta_avg_pred[None], masks_np[None])
+
+        global_preds.append(tta_avg_pred[None])
+        global_masks.append(masks_np[None])
+
+        oof_scores.append({
+            'image_path': img_path,
+            'base_dice': base_dice,
+            'tta_dice': tta_dice
+        })
+
+        pbar.set_postfix(base_dice=f'{base_dice:.4f}', tta_dice=f'{tta_dice:.4f}')
+
+    df_scores = pd.DataFrame(oof_scores)
+    logger.info(f"OOF evaluation completed for {len(df_scores)} samples")
+
+    # Merge on image_path instead of index
+    valid_df = valid_df.copy()
+    valid_df = valid_df.merge(df_scores, on='image_path', how='left')
+    valid_df.to_csv(f'tta_results_fold_{fold}.csv', index=False)
+    logger.info(f"TTA results saved to tta_results_fold_{fold}.csv")
+
+    global_preds = np.concatenate(global_preds, axis=0)
+    global_masks = np.concatenate(global_masks, axis=0)
+    global_dice = get_dice(global_preds, global_masks)
+    logger.info(f"Global OOF Dice score: {global_dice:.4f}")
+
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    return global_dice, valid_df
+
+
+def run_training(model, optimizer, scheduler, num_epochs, train_loader, valid_loader, fold=0, run=None):
+    logger.info(f"Starting training for fold {fold}")
+    if torch.cuda.is_available():
+        logger.info(f"CUDA device: {torch.cuda.get_device_name()}")
+        print(f"CUDA: {torch.cuda.get_device_name()}\n")
+
+    # Create the 'models' directory if it doesn't exist
+    os.makedirs('models', exist_ok=True)
+    logger.info("Models directory created/verified")
+
+    wandb.watch(model, log='all', log_freq=10)
+    logger.info("W&B model watching enabled")
+
+    start_time = time.time()
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_dice = -np.inf
+    best_epoch = -1
+    history = defaultdict(list)
+    logger.info(f"Training configuration - Epochs: {num_epochs}, Train batches: {len(train_loader)}, Valid batches: {len(valid_loader)}")
+
+    for epoch in range(1, num_epochs + 1):
+        gc.collect()
+        logger.info(f"Starting epoch {epoch}/{num_epochs}")
+        print(f"{'='*30}\nEpoch {epoch}/{num_epochs}")
+
+        train_loss, train_dice, train_jaccard = train_one_epoch(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            dataloader=train_loader,
+            device=CFG.device,
+            epoch=epoch,
+        )
+
+        val_loss, val_dice = valid_one_epoch(
+            model=model,
+            dataloader=valid_loader,
+            device=CFG.device,
+            optimizer=optimizer,
+            epoch=epoch
+        )
+
+        history['Train Loss'].append(train_loss)
+        history['Valid Loss'].append(val_loss)
+        history['Valid Dice'].append(val_dice)
+
+        logger.info(f"Epoch {epoch} results - Train Loss: {train_loss:.4f}, Train Dice: {train_dice:.4f}, Train Jaccard: {train_jaccard:.4f}, Valid Loss: {val_loss:.4f}, Valid Dice: {val_dice:.4f}")
+        print(f"Train Loss: {train_loss:.4f} - Train Dice: {train_dice:.4f} - Train Jaccard: {train_jaccard:.4f} | Valid Loss: {val_loss:.4f} | Valid Dice: {val_dice:.4f}")
+
+        # Save best model
+        if val_dice > best_dice:
+            logger.info(f"New best model found! Dice improved from {best_dice:.4f} to {val_dice:.4f}")
+            print(f"✓ Dice Improved: {best_dice:.4f} → {val_dice:.4f}")
+            best_dice = val_dice
+            best_epoch = epoch
+            best_model_wts = copy.deepcopy(model.state_dict())
+
+            best_path = f'models/best_fold{fold}_dice{best_dice:.4f}.pth'
+            torch.save(model.state_dict(), best_path)
+            logger.info(f"Best model saved to {best_path}")
+            print(f"✔ Model saved to {best_path}")
+            # W&B artifact
+            if run is not None:
+                artifact = wandb.Artifact(f'best_model_fold{fold}', type='model')
+                artifact.add_file(best_path)
+                run.log_artifact(artifact)
+                logger.info("Model artifact logged to W&B")
+
+        # Always save last epoch
+        last_path = f"last_epoch-S1-{fold:02d}.bin"
+        torch.save(model.state_dict(), last_path)
+
+        # Step scheduler if applicable
+        if CFG.scheduler in ["ReduceLROnPlateau", "ExponentialLR"]:
+            if CFG.scheduler == "ExponentialLR":
+                scheduler.step()
+            elif CFG.scheduler == "ReduceLROnPlateau":
+                scheduler.step(val_loss)
+
+        print()
+
+    elapsed = time.time() - start_time
+    h, m, s = int(elapsed // 3600), int((elapsed % 3600) // 60), int(elapsed % 60)
+    logger.info(f"Training completed in {h}h {m}m {s}s")
+    logger.info(f"Best Dice score: {best_dice:.4f} achieved at epoch {best_epoch}")
+    print(f"🏁 Training complete in {h}h {m}m {s}s")
+    print(f"🏆 Best Dice: {best_dice:.4f} (Epoch {best_epoch})")
+
+    model.load_state_dict(best_model_wts)
+    logger.info("Best model weights loaded for inference")
+    return model, history
+
+
+def fetch_scheduler(optimizer: Optimizer, training_steps: int = 0):
+    match CFG.scheduler:
+        case "CosineAnnealingLR":
+            scheduler = lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=training_steps * CFG.epochs, eta_min=CFG.min_lr
+            )
+        case "CosineAnnealingWarmRestarts":
+            scheduler = lr_scheduler.CosineAnnealingWarmRestarts(
+                optimizer, T_0=training_steps * 8, T_mult=1, eta_min=CFG.min_lr
+            )
+        case "ReduceLROnPlateau":
+            scheduler = lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="max",
+                factor=0.5,
+                patience=1,
+                cooldown=1,
+                min_lr=5e-6,
+                threshold=0.00001,
+            )
+        case "OneCycle":
+            scheduler = lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=CFG.max_lr,
+                total_steps=training_steps * CFG.epochs,
+                # epochs=CFG.epochs,
+                # steps_per_epoch=training_steps,
+                pct_start=0.25,
+            )
+        case "ExponentialLR":
+            scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+        case _:
+            print(
+                f"{c_}⚠️ WARNING: Unknown scheduler {CFG.scheduler}. Using StepLR with step_size=1.{sr_}"
+            )
+            return None
+
+    return scheduler
+
+
+def load_img(image_path, mask_path, scale = True):
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    img = cv2.resize(img, (CFG.img_size[1], CFG.img_size[0]), interpolation=cv2.INTER_LINEAR)
+    if mask_path == "":
+        mask = np.zeros_like(img, dtype=np.uint8)
+    else:
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        mask = cv2.resize(mask, (CFG.img_size[1], CFG.img_size[0]), interpolation=cv2.INTER_LINEAR)
+        mask = (mask > 0).astype(np.uint8)
+
+    img = np.expand_dims(img.astype("float32"), axis=-1)
+    mask = np.expand_dims(mask.astype("float32"), axis=-1)
+    if scale:
+        img = (img - img.min()) / (img.max() - img.min())
+        # img = (img - img.mean()) / img.std()
+    assert img.shape == mask.shape, f"Image shape {img.shape} does not match mask shape {mask.shape}"
+    return img, mask
+
+
+def get_dice(preds, masks, threshold=0.5, epsilon=1e-6):
+    """
+    Compute per-image Dice coefficient and return the mean across the batch.
+
+    preds, masks: np.ndarray of shape (B, H, W) or (B, 1, H, W)
+    """
+    preds = (preds > threshold).astype(np.uint8)
+    masks = (masks > threshold).astype(np.uint8)
+
+    if preds.ndim == 4 and preds.shape[1] == 1:
+        preds = preds[:, 0]
+        masks = masks[:, 0]
+
+    intersection = (preds & masks).sum(axis=(1, 2))
+    total = preds.sum(axis=(1, 2)) + masks.sum(axis=(1, 2))
+
+    dice_scores = (2.0 * intersection + epsilon) / (total + epsilon)
+    return dice_scores.mean()
+
+
+def prepare_loaders(df, data_transforms, fold, non_empty=False):
+    train_df = df[df.fold != fold].reset_index(drop=True)
+    valid_df = df[df.fold == fold].reset_index(drop=True)
+
+    if non_empty:
+        train_df = train_df[train_df['label'] == 0].reset_index(drop=True)
+        valid_df = valid_df[valid_df['label'] == 0].reset_index(drop=True)
+
+    train_dataset = BuildDataset(train_df, transforms=data_transforms['train'])
+    valid_dataset = BuildDataset(valid_df, transforms=data_transforms['valid'])
+
+    # Wrap the validation dataset in a deterministic TTA wrapper
+    base_oof_dataset = BuildDataset(valid_df, transforms=data_transforms['valid'])
+    oof_dataset = TTADataset(base_oof_dataset, tta_transforms=data_transforms['tta'])
+
+    train_loader = DataLoader(train_dataset, batch_size=CFG.train_bs,
+                            num_workers=8, shuffle=True, pin_memory=True, drop_last=False)
+
+    valid_loader = DataLoader(valid_dataset, batch_size=1,
+                            num_workers=8, shuffle=False, pin_memory=True)
+
+    oof_loader = DataLoader(oof_dataset, batch_size=1,  # returns [1, T, C, H, W]
+                            num_workers=8, shuffle=False, pin_memory=True)
+
+    return train_loader, valid_loader, oof_loader, len(train_df) // CFG.train_bs, valid_df
+
+
+
 def main():
-    import os
-    import time
-    import gc
-    import copy
-    from collections import defaultdict
 
 
     logger.info("="*50)
@@ -179,22 +670,6 @@ def main():
 
     logger.info(f"WANDB_API_KEY: {'*' * 10 if WANDB_API_KEY else 'Not set'}")
 
-
-    def set_seed(seed = 42):
-        '''Sets the seed of the entire notebook so results are the same every time we run.
-        This is for REPRODUCIBILITY.'''
-        logger.info(f"Setting random seed to {seed} for reproducibility...")
-        np.random.seed(seed)
-        random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        # When running on the CuDNN backend, two further options must be set
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        # Set a fixed value for the hash seed
-        os.environ['PYTHONHASHSEED'] = str(seed)
-        logger.info('Random seed set successfully')
-
     set_seed(CFG.seed)
 
 
@@ -238,43 +713,7 @@ def main():
 
 
 
-    def load_img(image_path, mask_path, scale = True):
-        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        img = cv2.resize(img, (CFG.img_size[1], CFG.img_size[0]), interpolation=cv2.INTER_LINEAR)
-        if mask_path == "":
-            mask = np.zeros_like(img, dtype=np.uint8)
-        else:
-            mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-            mask = cv2.resize(mask, (CFG.img_size[1], CFG.img_size[0]), interpolation=cv2.INTER_LINEAR)
-            mask = (mask > 0).astype(np.uint8)
-
-        img = np.expand_dims(img.astype("float32"), axis=-1)
-        mask = np.expand_dims(mask.astype("float32"), axis=-1)
-        if scale:
-            img = (img - img.min()) / (img.max() - img.min())
-            # img = (img - img.mean()) / img.std()
-        assert img.shape == mask.shape, f"Image shape {img.shape} does not match mask shape {mask.shape}"
-        return img, mask
-
-
-    def get_dice(preds, masks, threshold=0.5, epsilon=1e-6):
-        """
-        Compute per-image Dice coefficient and return the mean across the batch.
-
-        preds, masks: np.ndarray of shape (B, H, W) or (B, 1, H, W)
-        """
-        preds = (preds > threshold).astype(np.uint8)
-        masks = (masks > threshold).astype(np.uint8)
-
-        if preds.ndim == 4 and preds.shape[1] == 1:
-            preds = preds[:, 0]
-            masks = masks[:, 0]
-
-        intersection = (preds & masks).sum(axis=(1, 2))
-        total = preds.sum(axis=(1, 2)) + masks.sum(axis=(1, 2))
-
-        dice_scores = (2.0 * intersection + epsilon) / (total + epsilon)
-        return dice_scores.mean()
+    
 
 
 
@@ -349,58 +788,16 @@ def main():
 
 
 
-    data_transforms = {"train": A.Compose([A.HorizontalFlip(p=0.5),
-                                       A.VerticalFlip(p=0.5),
-                                    #    A.ShiftScaleRotate(rotate_limit=25, scale_limit=0.15, shift_limit=0, p=0.25),
-#                                        A.CoarseDropout(max_holes=16, max_height=64 ,max_width=64 ,p=0.5),
-#                                        A.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.25, p=0.75),
-#                                        A.GridDistortion(num_steps=5, distort_limit=0.3, interpolation=1, p=0.5),
-                                       A.RandomCrop(height=CFG.img_size[0], width=CFG.img_size[1], always_apply=True, p=1)
-                                        ]),
-
-                    "valid": A.Compose([]),#PadToDivisible(divisible=32, always_apply=True, p=1.0),
-
-                    "tta": [
-                        A.Compose([]),  # identity
-                        A.HorizontalFlip(p=1.0),
-                        A.VerticalFlip(p=1.0)
-                     ]
-                    }
     
 
 
 
 
 
-    def prepare_loaders(fold, non_empty=False):
-        train_df = df[df.fold != fold].reset_index(drop=True)
-        valid_df = df[df.fold == fold].reset_index(drop=True)
-
-        if non_empty:
-            train_df = train_df[train_df['label'] == 0].reset_index(drop=True)
-            valid_df = valid_df[valid_df['label'] == 0].reset_index(drop=True)
-
-        train_dataset = BuildDataset(train_df, transforms=data_transforms['train'])
-        valid_dataset = BuildDataset(valid_df, transforms=data_transforms['valid'])
-
-        # Wrap the validation dataset in a deterministic TTA wrapper
-        base_oof_dataset = BuildDataset(valid_df, transforms=data_transforms['valid'])
-        oof_dataset = TTADataset(base_oof_dataset, tta_transforms=data_transforms['tta'])
-
-        train_loader = DataLoader(train_dataset, batch_size=CFG.train_bs,
-                                num_workers=8, shuffle=True, pin_memory=True, drop_last=False)
-
-        valid_loader = DataLoader(valid_dataset, batch_size=1,
-                                num_workers=8, shuffle=False, pin_memory=True)
-
-        oof_loader = DataLoader(oof_dataset, batch_size=1,  # returns [1, T, C, H, W]
-                                num_workers=8, shuffle=False, pin_memory=True)
-
-        return train_loader, valid_loader, oof_loader, len(train_df) // CFG.train_bs, valid_df
-
+    
 
     logger.info("Testing data loaders and visualizing sample data...")
-    train_loader, valid_loader, oof_loader, _, valid_df = prepare_loaders(fold=0)
+    train_loader, valid_loader, oof_loader, _, valid_df = prepare_loaders(df, data_transforms, fold=0)
     logger.info(f"Data loaders prepared - Train: {len(train_loader)} batches, Valid: {len(valid_loader)} batches")
     
     imgs, masks, _ = next(iter(train_loader))
@@ -440,60 +837,10 @@ def main():
 
 
 
-    def build_model():
-        logger.info(f"Building U-Net model with backbone: {CFG.backbone}")
-        model = smp.Unet(encoder_name=CFG.backbone,      # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
-                        encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
-                        in_channels=1,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
-                        classes=1,                      # model output channels (number of classes in your dataset)
-                        activation=None,
-                        decoder_attention_type = CFG.decoder_attention_type, #"scse",
-                        aux_params = None if not CFG.aux_head else {"classes": 1,
-                                                                    "activation": None})
-        model.to(CFG.device)
-        logger.info(f"Model built and moved to device: {CFG.device}")
-        logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        return model
-
-
-    def load_model(path):
-        logger.info(f"Loading model from: {path}")
-        model = build_model()
-        model.load_state_dict(torch.load(path))
-        model.eval()
-        logger.info("Model loaded and set to evaluation mode")
-        return model
 
 
 
-    #JaccardLoss    = smp.losses.JaccardLoss(mode='binary')
-    DiceLoss       = smp.losses.DiceLoss(mode='binary')
-    #BCELoss        = smp.losses.SoftBCEWithLogitsLoss()
-    #LovaszLoss     = smp.losses.LovaszLoss(mode='binary', per_image=False)
-    #TverskyLoss    = smp.losses.TverskyLoss(mode='binary', log_loss=False, smooth=0.1)
-    #SegFocalLoss   = smp.losses.FocalLoss(mode = 'binary')
-    #BCE = torch.nn.BCEWithLogitsLoss()
 
-    def dice_coef(y_true, y_pred, thr=0.5, dim=(2, 3), epsilon=1e-6):
-        y_true = y_true.float()
-        y_pred = (y_pred > thr).float()
-        inter = (y_true * y_pred).sum(dim=dim)
-        den = y_true.sum(dim=dim) + y_pred.sum(dim=dim)
-        dice = (2 * inter + epsilon) / (den + epsilon)
-        return dice.mean()  # mean over batch (and channel if present)
-
-
-    def iou_coef(y_true, y_pred, thr=0.5, dim=(2, 3), epsilon=1e-6):
-        y_true = y_true.float()
-        y_pred = (y_pred > thr).float()
-        inter = (y_true * y_pred).sum(dim=dim)
-        union = y_true.sum(dim=dim) + y_pred.sum(dim=dim) - inter
-        iou = (inter + epsilon) / (union + epsilon)
-        return iou.mean()  # mean over batch
-
-
-    def criterion(y_pred, y_true):
-        return DiceLoss(y_pred, y_true)
 
     # def criterion(y_pred, y_true):
     #     if CFG.aux_head:
@@ -503,337 +850,7 @@ def main():
     #     return 0.5*DiceLoss(y_pred, y_true) + 0.5*SegFocalLoss(y_pred, y_true)
 
 
-    def train_one_epoch(model, optimizer, scheduler, dataloader, device, epoch:int):
-        logger.info(f"Starting training epoch {epoch}")
-        model.train()
-
-        dataset_size = 0
-        running_loss = 0.0
-        train_jaccards = []
-        train_dices = []
-
-        sigmoid = torch.sigmoid  # Faster than instantiating nn.Sigmoid()
-
-        pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Train ')
-
-        optimizer.zero_grad()
-
-        for step, (images, masks, paths) in pbar:
-            images = images.to(device, dtype=torch.float)
-            masks  = masks.to(device, dtype=torch.float)
-            batch_size = images.size(0)
-
-            y_pred = model(images)
-            loss = criterion(y_pred, masks)
-            loss.backward()
-
-            y_pred = sigmoid(y_pred)
-
-            train_dice = dice_coef(masks, y_pred).cpu().item()
-            train_jaccard = iou_coef(masks, y_pred).cpu().item()
-            train_dices.append(train_dice)
-            train_jaccards.append(train_jaccard)
-
-            if (step + 1) % CFG.n_accumulate == 0:
-                optimizer.step()
-                optimizer.zero_grad()
-
-                if scheduler and CFG.scheduler not in ["ReduceLROnPlateau", "ExponentialLR"]:
-                    scheduler.step()
-
-            running_loss += loss.item() * batch_size
-            dataset_size += batch_size
-
-            epoch_loss = running_loss / dataset_size
-            wandb.log({'train_loss': running_loss, 'epoch': epoch})
-            # W&B per-epoch training metrics
-            current_lr = optimizer.param_groups[0]['lr']
-            mem = torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0
-
-            pbar.set_postfix(loss=f'{epoch_loss:0.4f}',
-                            lr=f'{current_lr:0.5f}',
-                            jac=np.mean(train_jaccards),
-                            dice=np.mean(train_dices),
-                            gpu_mem=f'{mem:0.2f} GB')
-
-        torch.cuda.empty_cache()
-        gc.collect()
-        
-        epoch_dice = np.mean(train_dices)
-        epoch_jaccard = np.mean(train_jaccards)
-        logger.info(f"Epoch {epoch} training completed - Loss: {epoch_loss:.4f}, Dice: {epoch_dice:.4f}, Jaccard: {epoch_jaccard:.4f}")
-
-        return epoch_loss, epoch_dice, epoch_jaccard
-
-
-    @torch.no_grad()
-    def valid_one_epoch(model, dataloader, device, optimizer, epoch:int):
-        logger.info(f"Starting validation epoch {epoch}")
-        model.eval()
-
-        dataset_size = 0
-        running_loss = 0.0
-        global_masks = []
-        global_preds = []
-
-        pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Valid ')
-
-        for step, (images, masks, paths) in pbar:
-            images = images.float().to(device)
-            masks = masks.float().to(device)
-            batch_size = images.size(0)
-
-            y_pred = model(images)
-            loss = criterion(y_pred, masks)
-            running_loss += loss.item() * batch_size
-            dataset_size += batch_size
-
-            epoch_loss = running_loss / dataset_size
-
-            y_pred = torch.sigmoid(y_pred)
-            global_masks.append(masks.cpu().numpy())
-            global_preds.append(y_pred.detach().cpu().numpy())
-
-            current_lr = optimizer.param_groups[0]['lr']
-            mem = torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0
-            pbar.set_postfix(valid_loss=f'{epoch_loss:0.4f}',
-                            lr=f'{current_lr:0.5f}',
-                            gpu_mem=f'{mem:0.2f} GB')
-
-        # For sample images, take first example of last batch
-        # Concatenate all batches
-        global_masks = np.concatenate(global_masks, axis=0)
-        global_preds = np.concatenate(global_preds, axis=0)
-        global_dice = get_dice(global_preds, global_masks)
-
-        # Log overall validation metrics
-        wandb.log({'val_loss': epoch_loss, 'val_dice': global_dice, 'epoch': epoch})
-
-        # For sample images, take first example of last batch
-        img_np = images[0].cpu().permute(1,2,0).numpy()
-        mask_np = masks[0].cpu().permute(1,2,0).numpy()
-        pred_np = global_preds[-1][0].astype('float32') # Remove transpose as it's a single channel
-        wandb.log({
-            'input': wandb.Image(img_np, caption='input'),
-            'mask': wandb.Image(mask_np, caption='mask'),
-            'pred': wandb.Image(pred_np, caption='pred'),
-            'epoch': epoch
-        })
-
-        torch.cuda.empty_cache()
-        gc.collect()
-        
-        logger.info(f"Epoch {epoch} validation completed - Loss: {epoch_loss:.4f}, Dice: {global_dice:.4f}")
-
-        return epoch_loss, global_dice
-
-    
-
-    def reverse_transform(pred, transform_type):
-        if transform_type == "hflip":
-            return np.fliplr(pred)
-        elif transform_type == "vflip":
-            return np.flipud(pred)
-        elif transform_type == "identity":
-            return pred
-        else:
-            raise ValueError(f"Unknown TTA transform: {transform_type}")
-
-    @torch.no_grad()
-    def oof_one_epoch(model, dataloader, device, valid_df, fold, tta_transform_names):
-        logger.info(f"Starting out-of-fold evaluation for fold {fold}")
-        model.eval()
-
-        oof_scores = []
-        global_preds = []
-        global_masks = []
-
-        pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='OOF Eval')
-
-        for step, (tta_images, masks, img_path) in pbar:
-            tta_images = tta_images.squeeze(0).to(device).float()
-            masks = masks.squeeze(0).to(device).float()
-            img_path = img_path[0] if isinstance(img_path, list) else img_path
-            img_path = str(img_path)  # ensure string for merging
-
-            preds = model(tta_images)
-            preds = torch.sigmoid(preds).squeeze(1).cpu().numpy()
-            masks_np = masks.squeeze().cpu().numpy()
-
-            aligned_preds = []
-            for pred, tname in zip(preds, tta_transform_names):
-                aligned_preds.append(reverse_transform(pred, tname))
-
-            aligned_preds = np.stack(aligned_preds, axis=0)
-            tta_avg_pred = aligned_preds.mean(axis=0)
-            base_pred = aligned_preds[0]
-
-            base_dice = get_dice(base_pred[None], masks_np[None])
-            tta_dice = get_dice(tta_avg_pred[None], masks_np[None])
-
-            global_preds.append(tta_avg_pred[None])
-            global_masks.append(masks_np[None])
-
-            oof_scores.append({
-                'image_path': img_path,
-                'base_dice': base_dice,
-                'tta_dice': tta_dice
-            })
-
-            pbar.set_postfix(base_dice=f'{base_dice:.4f}', tta_dice=f'{tta_dice:.4f}')
-
-        df_scores = pd.DataFrame(oof_scores)
-        logger.info(f"OOF evaluation completed for {len(df_scores)} samples")
-
-        # Merge on image_path instead of index
-        valid_df = valid_df.copy()
-        valid_df = valid_df.merge(df_scores, on='image_path', how='left')
-        valid_df.to_csv(f'tta_results_fold_{fold}.csv', index=False)
-        logger.info(f"TTA results saved to tta_results_fold_{fold}.csv")
-
-        global_preds = np.concatenate(global_preds, axis=0)
-        global_masks = np.concatenate(global_masks, axis=0)
-        global_dice = get_dice(global_preds, global_masks)
-        logger.info(f"Global OOF Dice score: {global_dice:.4f}")
-
-        torch.cuda.empty_cache()
-        gc.collect()
-
-        return global_dice, valid_df
-
-
-
-    def run_training(model, optimizer, scheduler, num_epochs, train_loader, valid_loader, fold=0):
-        logger.info(f"Starting training for fold {fold}")
-        if torch.cuda.is_available():
-            logger.info(f"CUDA device: {torch.cuda.get_device_name()}")
-            print(f"CUDA: {torch.cuda.get_device_name()}\n")
-
-        # Create the 'models' directory if it doesn't exist
-        os.makedirs('models', exist_ok=True)
-        logger.info("Models directory created/verified")
-
-        wandb.watch(model, log='all', log_freq=10)
-        logger.info("W&B model watching enabled")
-
-        start_time = time.time()
-        best_model_wts = copy.deepcopy(model.state_dict())
-        best_dice = -np.inf
-        best_epoch = -1
-        history = defaultdict(list)
-        logger.info(f"Training configuration - Epochs: {num_epochs}, Train batches: {len(train_loader)}, Valid batches: {len(valid_loader)}")
-
-        for epoch in range(1, num_epochs + 1):
-            gc.collect()
-            logger.info(f"Starting epoch {epoch}/{num_epochs}")
-            print(f"{'='*30}\nEpoch {epoch}/{num_epochs}")
-
-            train_loss, train_dice, train_jaccard = train_one_epoch(
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                dataloader=train_loader,
-                device=CFG.device,
-                epoch=epoch,
-            )
-
-            val_loss, val_dice = valid_one_epoch(
-                model=model,
-                dataloader=valid_loader,
-                device=CFG.device,
-                optimizer=optimizer,
-                epoch=epoch
-            )
-
-            history['Train Loss'].append(train_loss)
-            history['Valid Loss'].append(val_loss)
-            history['Valid Dice'].append(val_dice)
-
-            logger.info(f"Epoch {epoch} results - Train Loss: {train_loss:.4f}, Train Dice: {train_dice:.4f}, Train Jaccard: {train_jaccard:.4f}, Valid Loss: {val_loss:.4f}, Valid Dice: {val_dice:.4f}")
-            print(f"Train Loss: {train_loss:.4f} - Train Dice: {train_dice:.4f} - Train Jaccard: {train_jaccard:.4f} | Valid Loss: {val_loss:.4f} | Valid Dice: {val_dice:.4f}")
-
-            # Save best model
-            if val_dice > best_dice:
-                logger.info(f"New best model found! Dice improved from {best_dice:.4f} to {val_dice:.4f}")
-                print(f"✓ Dice Improved: {best_dice:.4f} → {val_dice:.4f}")
-                best_dice = val_dice
-                best_epoch = epoch
-                best_model_wts = copy.deepcopy(model.state_dict())
-
-                best_path = f'models/best_fold{fold}_dice{best_dice:.4f}.pth'
-                torch.save(model.state_dict(), best_path)
-                logger.info(f"Best model saved to {best_path}")
-                print(f"✔ Model saved to {best_path}")
-                # W&B artifact
-                artifact = wandb.Artifact(f'best_model_fold{fold}', type='model')
-                artifact.add_file(best_path)
-                run.log_artifact(artifact)
-                logger.info("Model artifact logged to W&B")
-
-            # Always save last epoch
-            last_path = f"last_epoch-S1-{fold:02d}.bin"
-            torch.save(model.state_dict(), last_path)
-
-            # Step scheduler if applicable
-            if CFG.scheduler in ["ReduceLROnPlateau", "ExponentialLR"]:
-                if CFG.scheduler == "ExponentialLR":
-                    scheduler.step()
-                elif CFG.scheduler == "ReduceLROnPlateau":
-                    scheduler.step(val_loss)
-
-            print()
-
-        elapsed = time.time() - start_time
-        h, m, s = int(elapsed // 3600), int((elapsed % 3600) // 60), int(elapsed % 60)
-        logger.info(f"Training completed in {h}h {m}m {s}s")
-        logger.info(f"Best Dice score: {best_dice:.4f} achieved at epoch {best_epoch}")
-        print(f"🏁 Training complete in {h}h {m}m {s}s")
-        print(f"🏆 Best Dice: {best_dice:.4f} (Epoch {best_epoch})")
-
-        model.load_state_dict(best_model_wts)
-        logger.info("Best model weights loaded for inference")
-        return model, history
-
-
-
-    def fetch_scheduler(optimizer: Optimizer, training_steps: int = 0):
-        match CFG.scheduler:
-            case "CosineAnnealingLR":
-                scheduler = lr_scheduler.CosineAnnealingLR(
-                    optimizer, T_max=training_steps * CFG.epochs, eta_min=CFG.min_lr
-                )
-            case "CosineAnnealingWarmRestarts":
-                scheduler = lr_scheduler.CosineAnnealingWarmRestarts(
-                    optimizer, T_0=training_steps * 8, T_mult=1, eta_min=CFG.min_lr
-                )
-            case "ReduceLROnPlateau":
-                scheduler = lr_scheduler.ReduceLROnPlateau(
-                    optimizer,
-                    mode="max",
-                    factor=0.5,
-                    patience=1,
-                    cooldown=1,
-                    min_lr=5e-6,
-                    threshold=0.00001,
-                )
-            case "OneCycle":
-                scheduler = lr_scheduler.OneCycleLR(
-                    optimizer,
-                    max_lr=CFG.max_lr,
-                    total_steps=training_steps * CFG.epochs,
-                    # epochs=CFG.epochs,
-                    # steps_per_epoch=training_steps,
-                    pct_start=0.25,
-                )
-            case "ExponentialLR":
-                scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
-            case _:
-                print(
-                    f"{c_}⚠️ WARNING: Unknown scheduler {CFG.scheduler}. Using StepLR with step_size=1.{sr_}"
-                )
-                return None
-
-        return scheduler
+    # All training functions moved to module level
 
 
     logger.info("Starting k-fold cross-validation training...")
@@ -856,8 +873,7 @@ def main():
         # Loaders for this fold (train + valid + TTA OOF)
         logger.info(f"Preparing data loaders for fold {fold}...")
         train_loader, valid_loader, oof_loader, train_steps, valid_df = prepare_loaders(
-            fold=fold,
-            non_empty=False,
+            df, data_transforms, fold=fold, non_empty=False
         )
 
         scheduler = fetch_scheduler(optimizer, train_steps)
@@ -872,7 +888,8 @@ def main():
             num_epochs=CFG.epochs,
             train_loader=train_loader,
             valid_loader=valid_loader,
-            fold=fold
+            fold=fold,
+            run=run
         )
 
         # TTA-based OOF prediction
