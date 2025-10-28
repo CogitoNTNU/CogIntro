@@ -70,59 +70,36 @@ logger = logging.getLogger(__name__)
 def main():
     import os
     import time
-    import torch
     import gc
     import copy
     from collections import defaultdict
-    import numpy as np
 
 
 
-    import os
-    from pathlib import Path
-    import wandb
-    import logging
 
-    import numpy as np
-    import pandas as pd
     # pd.options.plotting.backend = "plotly"
-    import random
-    from glob import glob
     from tqdm import tqdm
     tqdm.pandas()
 
-    from dataclasses import dataclass
 
 
     # visualization
-    import cv2
-    import matplotlib.pyplot as plt
 
     # Sklearn
-    from sklearn.model_selection import StratifiedGroupKFold
 
     # PyTorch
-    import segmentation_models_pytorch as smp
 
-    import torch
-    import torch.optim as optim
-    from torch.optim import lr_scheduler
-    from torch.utils.data import DataLoader
-    from torch.optim import Optimizer
 
     # Albumentations for augmentations
-    import albumentations as A
 
 
     # Add Monitoring and Logging
-    from datetime import datetime
 
     # For colored terminal text
     from colorama import Fore, Style
     c_  = Fore.GREEN
     sr_ = Style.RESET_ALL
 
-    import warnings
 
     logger.info("="*50)
     logger.info("Starting tumor segmentation training script")
@@ -480,7 +457,6 @@ def main():
         plt.imshow(_mask, alpha = 0.25, cmap = 'gray')
         plt.show()
 
-    import gc
     gc.collect()
     logger.info("Memory cleanup completed")
 
@@ -751,9 +727,6 @@ def main():
 
 
 
-    from collections import defaultdict
-    import time
-    import copy
     import torch
     import gc
     import numpy as np
