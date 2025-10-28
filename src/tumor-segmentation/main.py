@@ -103,32 +103,6 @@ def main():
     from collections import defaultdict
 
 
-
-
-    # pd.options.plotting.backend = "plotly"
-    from tqdm import tqdm
-    tqdm.pandas()
-
-
-
-    # visualization
-
-    # Sklearn
-
-    # PyTorch
-
-
-    # Albumentations for augmentations
-
-
-    # Add Monitoring and Logging
-
-    # For colored terminal text
-    from colorama import Fore, Style
-    c_  = Fore.GREEN
-    sr_ = Style.RESET_ALL
-
-
     logger.info("="*50)
     logger.info("Starting tumor segmentation training script")
     logger.info("="*50)
@@ -728,12 +702,6 @@ def main():
         return global_dice, valid_df
 
 
-
-
-    import torch
-    import gc
-    import numpy as np
-    import os
 
     def run_training(model, optimizer, scheduler, num_epochs, train_loader, valid_loader, fold=0):
         logger.info(f"Starting training for fold {fold}")
