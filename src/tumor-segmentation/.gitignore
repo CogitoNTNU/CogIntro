@@ -32,7 +32,12 @@ MANIFEST
 *.manifest
 *.spec
 
-# Installer logs
+# Installer logs	last_epoch-S1-00.bin
+	last_epoch-S1-01.bin
+	last_epoch-S1-02.bin
+	src/.config.py.swp
+	tta_results_fold_0.csv
+	tta_results_fold_1.csv
 pip-log.txt
 pip-delete-this-directory.txt
 
@@ -199,6 +204,14 @@ wandb
 # Project
 data/psma-fdg-pet-ct-lesions.zip
 data/psma-fdg-pet-ct-lesions/
+data/autopet/
 
 slurm_outputs/
 wandb/
+
+last_epoch-S1-00.bin
+last_epoch-S1-01.bin
+last_epoch-S1-02.bin
+src/.config.py.swp
+tta_results_fold_0.csv
+tta_results_fold_1.csv

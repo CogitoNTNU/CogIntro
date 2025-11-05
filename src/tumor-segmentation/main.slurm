@@ -3,13 +3,13 @@
 #SBATCH --job-name="tumor-segmentation"
 #SBATCH --time=03:00:00
 #SBATCH --partition=GPUQ
-#SBATCH --gres=gpu:a100:1
-#SBATCH --constraint=gpu80g
+#SBATCH --gres=gpu:1
+#SBATCH --constraint="(a100|h100)&(gpu32g|gpu40g|gpu80g)"
 #SBATCH --mem=32GB
 #SBATCH --nodes=1
-#SBATCH --output=slurm_outputs/output_tumor_seg.txt
-#SBATCH --error=slurm_outputs/output_tumor_seg.err
-#SBATCH --mail-user=sverrnys@ntnu.no
+#SBATCH --output=slurm_outputs/output_tumor_seg_%j.txt
+#SBATCH --error=slurm_outputs/output_tumor_seg_%j.err
+#SBATCH --mail-user=sveinung.myhre@ntnu.no
 #SBATCH --mail-type=ALL
 
 

@@ -93,7 +93,6 @@ urllib3==2.4.0
 wandb==0.20.1
 wcwidth==0.2.13
 nibabel
-
 numpy
 pandas
 matplotlib
