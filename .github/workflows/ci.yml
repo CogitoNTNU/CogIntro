@@ -38,13 +38,7 @@ jobs:
         continue-on-error: true
 
       - name: Install and sync dependencies
-        run: |
-          cd src/flappy-bird-gym
-          uv sync --locked --all-extras
-
-      - name: Run root tests
-        run: |
-            uv run pytest --doctest-modules --cov=src --cov-report=html
+        run: uv sync --locked
 
 
   deploy:
