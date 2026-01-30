@@ -1,131 +1,164 @@
-<!-- TODO: CHANGE ALL INSTANCES OF "PROJECT-TEMPLATE" IN ENTIRE PROJECT TO YOUR PROJECT TITLE-->
-
-# PROJECT-TEMPLATE
+# cogintro
 
 <div align="center">
 
-![GitHub Workflow Status (with event)](https://img.shields.io/github/actions/workflow/status/CogitoNTNU/PROJECT-TEMPLATE/ci.yml)
-![GitHub top language](https://img.shields.io/github/languages/top/CogitoNTNU/PROJECT-TEMPLATE)
-![GitHub language count](https://img.shields.io/github/languages/count/CogitoNTNU/PROJECT-TEMPLATE)
+![GitHub top language](https://img.shields.io/github/languages/top/CogitoNTNU/cogintro)
+![GitHub language count](https://img.shields.io/github/languages/count/CogitoNTNU/cogintro)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Project Version](https://img.shields.io/badge/version-0.0.1-blue)](https://img.shields.io/badge/version-0.0.1-blue)
 
-<img src="docs/images/project-logo.webp" width="50%" alt="Cogito Project Logo" style="display: block; margin-left: auto; margin-right: auto;">
+**Cogito NTNU's Introduction Group**
+
 </div>
 
-<details> 
-<summary><b>📋 Table of contents </b></summary>
+## Overview
 
-- [PROJECT-TEMPLATE](#PROJECT-TEMPLATE)
-  - [Description](#description)
-  - [🛠️ Prerequisites](#%EF%B8%8F-prerequisites)
-  - [Getting started](#getting-started)
-  - [Usage](#usage)
-    - [📖 Generate Documentation Site](#-generate-documentation-site)
-  - [Testing](#testing)
-  - [Team](#team)
-    - [License](#license)
+This repository contains materials and projects from Cogito NTNU's introduction group. Unlike regular Cogito projects that focus on a single target throughout the semester, CogIntro covers a broad range of AI/ML topics to maximize learning. The group of 8 members met twice a week in afternoon sessions, with each subproject spanning 1-4 weeks. The progression went from foundational tooling through increasingly complex applications, ending with a deep learning project on HPC infrastructure.
 
-</details>
+### Course Progression
 
-## Description
+```mermaid
+flowchart LR
+    A[Project Start] --> B[Git]
+    B --> C[ML Fundamentals]
+    C --> D[Flappy Bird RL]
+    D --> E[LLM Chatbot]
+    E --> F[Tumor Segmentation]
+    F --> G[Project Presentation]
 
-<!-- TODO: Provide a brief overview of what this project does and its key features. Please add pictures or videos of the application -->
-
-## 🛠️ Prerequisites
-
-<!-- TODO: In this section you put what is needed for the program to run.
-For example: OS version, programs, libraries, etc.  
-
--->
-
-- **Git**: Ensure that git is installed on your machine. [Download Git](https://git-scm.com/downloads)
-- **Python 3.12**: Required for the project. [Download Python](https://www.python.org/downloads/)
-- **UV**: Used for managing Python environments. [Install UV](https://docs.astral.sh/uv/getting-started/installation/)
-- **Docker** (optional): For DevContainer development. [Download Docker](https://www.docker.com/products/docker-desktop)
-
-## Getting started
-
-<!-- TODO: In this Section you describe how to install this project in its intended environment.(i.e. how to get it to run)  
--->
-
-1. **Clone the repository**:
-
-   ```sh
-   git clone https://github.com/CogitoNTNU/PROJECT-TEMPLATE.git
-   cd PROJECT-TEMPLATE
-   ```
-
-1. **Install dependencies**:
-
-   ```sh
-   uv sync
-   ```
-
-<!--
-1. **Configure environment variables**:
-    This project uses environment variables for configuration. Copy the example environment file to create your own:
-    ```sh
-    cp .env.example .env
-    ```
-    Then edit the `.env` file to include your specific configuration settings.
--->
-
-1. **Set up pre commit** (only for development):
-   ```sh
-   uv run pre-commit install
-   ```
-
-## Usage
-
-To run the project, run the following command from the root directory of the project:
-
-```bash
-
+    style A fill:#374151,stroke:#6b7280
+    style G fill:#374151,stroke:#6b7280
 ```
 
-<!-- TODO: Instructions on how to run the project and use its features. -->
+## Projects
 
-### 📖 Generate Documentation Site
+### Fundamentals
 
-To build and preview the documentation site locally:
+Terminal usage, Git workflows, and introductory ML concepts via Kaggle notebooks.
 
-```bash
-uv run mkdocs build
-uv run mkdocs serve
+### Flappy Bird Agent
+
+A reinforcement learning agent trained to play Flappy Bird using the OpenAI Gym framework.
+
+<div align="center">
+<a href="src/flappy-bird-gym">
+<img src="docs/images/flappy-bird-agent.gif" width="200" alt="Flappy Bird RL Agent">
+</a>
+
+[Project folder →](src/flappy-bird-gym)
+</div>
+
+### LLM Chatbot
+
+A conversational chatbot built with OpenAI's Responses API.
+
+<div align="center">
+<a href="src/large-language-models">
+<img src="docs/images/chatbot-companion.jpeg" width="400" alt="LLM Chatbot">
+</a>
+
+[Project folder →](src/large-language-models)
+</div>
+
+### Tumor Segmentation on IDUN
+
+Medical image segmentation using U-Net architecture, trained on NTNU's IDUN HPC cluster via SLURM. The model segments tumor regions from PET/CT scans using k-fold cross-validation.
+
+<div align="center">
+<a href="src/tumor-segmentation">
+<img src="docs/images/tumor-segmentation-results.png" width="600" alt="Tumor Segmentation Results from W&B">
+</a>
+
+[Project folder →](src/tumor-segmentation)
+</div>
+
+## Prerequisites
+
+- **Git**: [Download Git](https://git-scm.com/downloads)
+- **Python 3.12**: [Download Python](https://www.python.org/downloads/)
+- **UV**: Python package manager. [Install UV](https://docs.astral.sh/uv/getting-started/installation/)
+
+## Getting Started
+
+```sh
+git clone https://github.com/CogitoNTNU/cogintro.git
+cd cogintro
+uv sync
 ```
 
-This will build the documentation and start a local server at [http://127.0.0.1:8000/](http://127.0.0.1:8000/) where you can browse the docs and API reference. Get the documentation according to the lastes commit on main by viewing the `gh-pages` branch on GitHub: [https://cogitontnu.github.io/PROJECT-TEMPLATE/](https://cogitontnu.github.io/PROJECT-TEMPLATE/).
+For development:
+```sh
+uv run pre-commit install
+```
 
-## Testing
+## Repository Structure
 
-To run the test suite, run the following command from the root directory of the project:
-
-```bash
-uv run pytest --doctest-modules --cov=src --cov-report=html
+```
+cogintro/
+├── src/
+│   ├── flappy-bird-gym/     # RL environment and agent
+│   ├── large-language-models/  # OpenAI chatbot notebook
+│   └── tumor-segmentation/  # U-Net model and SLURM scripts
+├── docs/
+└── tests/
 ```
 
 ## Team
 
-This project would not have been possible without the hard work and dedication of all of the contributors. Thank you for the time and effort you have put into making this project a reality.
-
 <table align="center">
     <tr>
-        <!--
         <td align="center">
-            <a href="https://github.com/NAME_OF_MEMBER">
-              <img src="https://github.com/NAME_OF_MEMBER.png?size=100" width="100px;" alt="NAME OF MEMBER"/><br />
-              <sub><b>NAME OF MEMBER</b></sub>
+            <a href="https://github.com/maiahi">
+              <img src="https://github.com/maiahi.png?size=100" width="100px;" alt="maiahi"/><br />
+              <sub><b>maiahi</b></sub>
             </a>
         </td>
-        -->
+        <td align="center">
+            <a href="https://github.com/AlMinaDO">
+              <img src="https://github.com/AlMinaDO.png?size=100" width="100px;" alt="AlMinaDO"/><br />
+              <sub><b>AlMinaDO</b></sub>
+            </a>
+        </td>
+        <td align="center">
+            <a href="https://github.com/arlindakm">
+              <img src="https://github.com/arlindakm.png?size=100" width="100px;" alt="arlindakm"/><br />
+              <sub><b>arlindakm</b></sub>
+            </a>
+        </td>
+        <td align="center">
+            <a href="https://github.com/flatval">
+              <img src="https://github.com/flatval.png?size=100" width="100px;" alt="flatval"/><br />
+              <sub><b>flatval</b></sub>
+            </a>
+        </td>
+    </tr>
+    <tr>
+        <td align="center">
+            <a href="https://github.com/Knolldus">
+              <img src="https://github.com/Knolldus.png?size=100" width="100px;" alt="Knolldus"/><br />
+              <sub><b>Knolldus</b></sub>
+            </a>
+        </td>
+        <td align="center">
+            <a href="https://github.com/Jarandvs">
+              <img src="https://github.com/Jarandvs.png?size=100" width="100px;" alt="Jarandvs"/><br />
+              <sub><b>Jarandvs</b></sub>
+            </a>
+        </td>
+        <td align="center">
+            <a href="https://github.com/ApatShe">
+              <img src="https://github.com/ApatShe.png?size=100" width="100px;" alt="ApatShe"/><br />
+              <sub><b>ApatShe</b></sub>
+            </a>
+        </td>
+        <td align="center">
+            <a href="https://github.com/svemyh">
+              <img src="https://github.com/svemyh.png?size=100" width="100px;" alt="svemyh"/><br />
+              <sub><b>svemyh</b></sub>
+            </a>
+        </td>
     </tr>
 </table>
 
-![Group picture](docs/img/team.png)
-
-### License
-
-______________________________________________________________________
+## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
